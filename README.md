@@ -55,7 +55,9 @@ Needs Xcode 26 (Swift 6.2). The app is ad-hoc signed.
 
 ### Screenshots
 
-`DayBar --demo` fills the panel with sample events and opens it; `--demo-confirm` also shows the quick-add confirm card. Demo mode never reads or writes your calendars. Add `--backdrop 4A6FA5` to put a plain colour behind the panel before you take the screenshot.
+`DayBar --demo` fills the panel with sample events and opens it; `--demo-confirm` also shows the quick-add confirm card. Demo mode never reads or writes your calendars. Add `--backdrop 4A6FA5` to put a plain colour behind the panel before you take the screenshot. `--demo-type "dentist friday 10:30 for 1h"` types into quick-add, waits on the confirm card and adds it, for recordings.
+
+`DayBar --parse "lunch with sam thu 1pm"` prints what quick-add would make of a phrase and exits.
 
 ## License
 

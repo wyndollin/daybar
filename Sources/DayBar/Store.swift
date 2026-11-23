@@ -52,7 +52,7 @@ final class Store: ObservableObject {
     private var timer: Timer?
 
     /// `--demo`: sample data for screenshots. Never reads or writes EventKit.
-    static let isDemo = CommandLine.arguments.contains("--demo") || CommandLine.arguments.contains("--demo-confirm")
+    static let isDemo = ["--demo", "--demo-confirm", "--demo-type"].contains { CommandLine.arguments.contains($0) }
 
     init() {
         if Self.isDemo { loadDemo(); return }
@@ -151,6 +151,10 @@ final class Store: ObservableObject {
 
     /// Calendars (events) or lists (reminders) that accept new items, grouped by account, account then title order.
     func calendars(for kind: Draft.Kind) -> [CalendarOption] {
+        if Self.isDemo {
+            return [CalendarOption(id: "personal", title: "Personal", account: "iCloud", color: .systemBlue),
+                    CalendarOption(id: "work", title: "Work", account: "iCloud", color: .systemPurple)]
+        }
         guard (kind == .event ? access : reminderAccess) == .granted else { return [] }
         return ek.calendars(for: kind == .event ? .event : .reminder)
             .filter { $0.allowsContentModifications }

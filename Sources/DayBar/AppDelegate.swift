@@ -62,15 +62,39 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {
         installKeyMonitor()
         registerHotKey()
         if Store.isDemo {
-            if CommandLine.arguments.contains("--demo-confirm") { composer.showDemoConfirm() }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.show(); self.pin() }
             let args = CommandLine.arguments
+            if args.contains("--demo-confirm") { composer.showDemoConfirm() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.show(); self.pin() }
+            if let i = args.firstIndex(of: "--demo-type"), i + 1 < args.count {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { self.playDemo(typing: args[i + 1]) }
+            }
             if let i = args.firstIndex(of: "--backdrop"), i + 1 < args.count, let rgb = Int(args[i + 1], radix: 16) {
                 showBackdrop(NSColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255,
                                      blue: CGFloat(rgb & 0xFF) / 255, alpha: 1))
             }
             if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.snapshot(to: args[i + 1]) }
+            }
+        }
+    }
+
+    /// `--demo-type "<text>"`: types into quick-add, submits, waits on the confirm card, adds. For the website video.
+    private func playDemo(typing text: String) {
+        panel.makeKey()
+        composer.focus()
+        var delay = 0.35
+        for ch in text {
+            delay += ch == " " ? 0.11 : Double.random(in: 0.055...0.095)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { self.composer.text.append(ch) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.45) {
+            self.composer.submit()
+            Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { t in
+                MainActor.assumeIsolated {
+                    guard case .confirm(let d) = self.composer.phase else { return }
+                    t.invalidate()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { self.composer.save(d) }
+                }
             }
         }
     }

@@ -148,6 +148,22 @@ enum Parser {
             }
         }
 
+        // Weekdays the user typed ("dentist friday 10:30") win too: the model sometimes answers with an ISO date
+        // and gets the day wrong. The model's clock is kept, only the day moves.
+        if typed.isEmpty {
+            let days = typedWeekdays(in: words, now: now)
+            if let first = days.first {
+                if let w = when, !Calendar.current.isDate(w.date, inSameDayAs: first) {
+                    when = When(date: w.hasTime ? onDay(first, clockOf: w.date) : first, hasTime: w.hasTime)
+                } else if when == nil {
+                    when = When(date: first, hasTime: false)
+                }
+            }
+            if days.count >= 2, let u = untilWhen, !Calendar.current.isDate(u.date, inSameDayAs: days[1]) {
+                untilWhen = When(date: u.hasTime ? onDay(days[1], clockOf: u.date) : days[1], hasTime: u.hasTime)
+            }
+        }
+
         // Same for durations: only if the user said how long.
         let typedDuration = lower.range(of: #"\bfor\b|hour|\bhr|\bmin|\d\s*h\b|half"#, options: .regularExpression) != nil
         let duration = typedDuration && p.durationMinutes > 0 ? p.durationMinutes : 60
@@ -254,6 +270,23 @@ enum Parser {
             }
         }
         return found.sorted { $0.at < $1.at }.map(\.date)
+    }
+
+    /// The weekdays named in the input as dates, in the order typed. The first is the next one after now ("friday"
+    /// on a Friday is next week's); each later one is the next after the one before, so "monday to friday" is a week.
+    static func typedWeekdays(in words: [String], now: Date) -> [Date] {
+        let names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+        let short = ["sun": 1, "mon": 2, "tue": 3, "tues": 3, "wed": 4, "thu": 5, "thur": 5, "thurs": 5, "fri": 6, "sat": 7]
+        let cal = Calendar.current
+        var after = now
+        var out: [Date] = []
+        for w in words {
+            guard let wd = names.firstIndex(of: w).map({ $0 + 1 }) ?? short[w],
+                  let d = cal.nextDate(after: after, matching: DateComponents(weekday: wd), matchingPolicy: .nextTime) else { continue }
+            out.append(d)
+            after = d
+        }
+        return out
     }
 
     // MARK: - Canonical "when" -> Date (plain code, no model)
