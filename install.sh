@@ -53,11 +53,26 @@ mv "$TMP/out/$APP_NAME.app" "$APP"
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 
 say "Installed $APP"
+
+# Quick-add reads what you type with Apple Intelligence, on this Mac. Ask DayBar whether it can
+# (at most 10 s, in case an older build doesn't know the flag) and say so plainly.
+ai="$(perl -e 'alarm 10; exec @ARGV' "$APP/Contents/MacOS/DayBar" --check-ai 2>/dev/null || true)"
+warn() { printf '\n\033[33m!\033[0m \033[1m%s\033[0m\n  %s\n' "$1" "$2"; }
+case "$ai" in
+  ready) printf '\n\033[32m✓\033[0m Apple Intelligence is on: quick-add will work.\n' ;;
+  off) warn "Quick-add needs Apple Intelligence, and it is turned off." \
+            "Turn it on in System Settings → Apple Intelligence & Siri. DayBar still shows your day without it." ;;
+  downloading) warn "Apple Intelligence is still downloading." \
+                    "Quick-add starts working once it finishes. DayBar already shows your day." ;;
+  unsupported) warn "This Mac can't run Apple Intelligence, so quick-add won't work." \
+                    "Everything else does: DayBar shows your day and your reminders." ;;
+esac
+
 open "$APP"
 cat <<'MSG'
 
 DayBar is now in your menu bar.
   • Allow Calendar and Reminders access when macOS asks.
-  • Hover the menu bar item to see today; press ⌥Space to quick-add.
+  • Hover the menu bar item to see today; press ⌥Space to quick-add (needs Apple Intelligence).
   • It starts at login from now on; turn that off in System Settings → General → Login Items.
 MSG

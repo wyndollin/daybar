@@ -14,7 +14,9 @@ More at **[marcdebatlle.com/bars](https://marcdebatlle.com/bars)**.
 - **⌥Space** opens it with the quick-add field focused. Type `call mom tomorrow 5pm` or `dentist friday 10:30 for 1h`, check the preview, and press Return.
 - Quick-add parsing runs on-device with Apple Intelligence. Nothing leaves your Mac.
 
-Requires **macOS 26** or later. Quick-add needs Apple Intelligence turned on. Without it, DayBar still shows your day.
+Requires **macOS 26** or later.
+
+**Quick-add needs Apple Intelligence turned on** (System Settings → Apple Intelligence & Siri). The installer checks and tells you if it's off. Without it, DayBar still shows your day; only typing new events and reminders needs it. `DayBar --check-ai` prints `ready`, `off`, `downloading` or `unsupported`.
 
 ## Install
 

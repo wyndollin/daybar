@@ -1,5 +1,17 @@
 import AppKit
+import FoundationModels
 import ServiceManagement
+
+// `DayBar --check-ai`: can quick-add run here? Prints one word and exits; the installer uses it.
+//   0 ready · 3 off (Apple Intelligence not turned on) · 4 downloading · 5 this Mac can't run it
+if CommandLine.arguments.contains("--check-ai") {
+    switch SystemLanguageModel.default.availability {
+    case .available: print("ready"); exit(0)
+    case .unavailable(.appleIntelligenceNotEnabled): print("off"); exit(3)
+    case .unavailable(.modelNotReady): print("downloading"); exit(4)
+    case .unavailable: print("unsupported"); exit(5)
+    }
+}
 
 // `DayBar --parse "dentist friday 10:30 for 1h"`: print what quick-add would make of it, then exit.
 if let i = CommandLine.arguments.firstIndex(of: "--parse"), i + 1 < CommandLine.arguments.count {
