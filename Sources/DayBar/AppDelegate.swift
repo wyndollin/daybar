@@ -61,6 +61,44 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {
         buildPanel()
         installKeyMonitor()
         registerHotKey()
+        if Store.isDemo {
+            if CommandLine.arguments.contains("--demo-confirm") { composer.showDemoConfirm() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.show(); self.pin() }
+            let args = CommandLine.arguments
+            if let i = args.firstIndex(of: "--backdrop"), i + 1 < args.count, let rgb = Int(args[i + 1], radix: 16) {
+                showBackdrop(NSColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                                     blue: CGFloat(rgb & 0xFF) / 255, alpha: 1))
+            }
+            if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.snapshot(to: args[i + 1]) }
+            }
+        }
+    }
+
+    private var backdrop: NSWindow?
+
+    /// `--backdrop RRGGBB`: a plain screen behind the panel, so screenshots don't pick up whatever is open.
+    private func showBackdrop(_ color: NSColor) {
+        guard let screen = NSScreen.main else { return }
+        let w = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        w.backgroundColor = color
+        w.level = .floating
+        w.ignoresMouseEvents = true
+        w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        w.orderFrontRegardless()
+        backdrop = w
+    }
+
+    /// `--snapshot <file.png>`: render the open panel at 2x and quit (for the README and website).
+    private func snapshot(to path: String) {
+        guard let view = panel.contentView else { return }
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * 2), pixelsHigh: Int(view.bounds.height * 2),
+                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                   colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        rep.size = view.bounds.size
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        NSApp.terminate(nil)
     }
 
     private func resizeItem() {

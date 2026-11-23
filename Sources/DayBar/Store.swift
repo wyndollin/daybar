@@ -51,7 +51,11 @@ final class Store: ObservableObject {
     private let ek = EKEventStore()
     private var timer: Timer?
 
+    /// `--demo`: sample data for screenshots. Never reads or writes EventKit.
+    static let isDemo = CommandLine.arguments.contains("--demo") || CommandLine.arguments.contains("--demo-confirm")
+
     init() {
+        if Self.isDemo { loadDemo(); return }
         NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: ek, queue: .main) { [weak self] _ in self?.reload() }
         NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in self?.reload() }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.reload() }
@@ -77,6 +81,7 @@ final class Store: ObservableObject {
     }
 
     func reload() {
+        if Self.isDemo { return }
         now = Date()
         reloadReminders()
         guard access == .granted else { events = []; return }
@@ -180,6 +185,7 @@ final class Store: ObservableObject {
     }
 
     func add(_ d: Draft) throws {
+        if Self.isDemo { return }
         let cal = Calendar.current
         switch d.kind {
         case .event:
@@ -238,5 +244,31 @@ final class Store: ObservableObject {
         if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
             NSWorkspace.shared.open(u)
         }
+    }
+
+    // MARK: demo
+
+    private func loadDemo() {
+        let cal = Calendar.current
+        let day = cal.startOfDay(for: Date())
+        func at(_ h: Int, _ m: Int) -> Date { cal.date(bySettingHour: h, minute: m, second: 0, of: day)! }
+        func ev(_ t: String, _ s: Date, _ e: Date, _ c: NSColor, _ loc: String = "", meet: Bool = false) -> DayEvent {
+            DayEvent(id: t, title: t, start: s, end: e, allDay: false, color: c, location: loc,
+                     meeting: meet ? URL(string: "https://meet.google.com/demo") : nil, calendarItemID: t)
+        }
+        access = .granted
+        reminderAccess = .granted
+        now = at(11, 20)
+        events = [
+            ev("Team standup", at(9, 0), at(9, 30), .systemBlue, meet: true),
+            ev("Product review", at(11, 0), at(12, 0), .systemPurple, "Room 4"),
+            ev("Lunch with Ana", at(13, 30), at(14, 30), .systemGreen, "Can Dendê"),
+            ev("1:1 with Jordan", at(16, 0), at(16, 45), .systemBlue, meet: true),
+            ev("Climbing", at(19, 30), at(21, 0), .systemOrange, "Sharma Climbing BCN"),
+        ]
+        reminders = [
+            DayReminder(id: "r1", title: "Send invoice to the studio", due: at(15, 0), hasTime: true, list: "Work", color: .systemOrange),
+            DayReminder(id: "r2", title: "Buy oat milk", due: day, hasTime: false, list: "Groceries", color: .systemGreen),
+        ]
     }
 }

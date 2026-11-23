@@ -59,5 +59,5 @@ cat <<'MSG'
 DayBar is now in your menu bar.
   • Allow Calendar and Reminders access when macOS asks.
   • Hover the menu bar item to see today; press ⌥Space to quick-add.
-  • To start it at login: System Settings → General → Login Items → add DayBar.
+  • It starts at login from now on; turn that off in System Settings → General → Login Items.
 MSG

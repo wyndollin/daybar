@@ -30,6 +30,18 @@ final class Composer: ObservableObject {
 
     func focus() { focusTick &+= 1 }
 
+    /// `--demo-confirm`: the confirm card for a typed request, for screenshots.
+    func showDemoConfirm() {
+        let cal = Calendar.current
+        var friday = cal.nextDate(after: Date(), matching: DateComponents(weekday: 6), matchingPolicy: .nextTime)!
+        friday = cal.date(bySettingHour: 10, minute: 30, second: 0, of: friday)!
+        text = "dentist friday 10:30 for 1h"
+        options = [CalendarOption(id: "personal", title: "Personal", account: "iCloud", color: .systemBlue),
+                   CalendarOption(id: "work", title: "Work", account: "iCloud", color: .systemPurple)]
+        phase = .confirm(Draft(kind: .event, title: "Dentist", start: friday, hasTime: true, durationMinutes: 60,
+                               urgent: false, calendarID: "personal", destination: "Personal"))
+    }
+
     /// Return / Escape from the panel. Returns false when the key wasn't ours (e.g. esc on an empty field).
     func handle(keyCode: UInt16) -> Bool {
         let isReturn = keyCode == 36 || keyCode == 76
@@ -146,7 +158,9 @@ struct ComposerView: View {
                     .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity).combined(with: .scale(scale: 0.97, anchor: .top)),
                                             removal: .opacity))
                 HStack(spacing: 10) {
-                    Text("Does this look right?").font(.system(size: 11)).foregroundStyle(.secondary)
+                    // Three hints leave room for the short question only; nothing here may wrap.
+                    Text(c.options.count > 1 ? "Look right?" : "Does this look right?")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).fixedSize()
                     Spacer()
                     if c.options.count > 1 { KeyHint(key: "⇥", label: "Calendar") }
                     KeyHint(key: "esc", label: "Edit")
@@ -382,6 +396,8 @@ private struct KeyHint: View {
                 .crispGlass(Capsule())
             Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
         }
+        .lineLimit(1)
+        .fixedSize()
     }
 }
 
