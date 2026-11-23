@@ -66,7 +66,7 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {
             if args.contains("--demo-confirm") { composer.showDemoConfirm() }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.show(); self.pin() }
             if let i = args.firstIndex(of: "--demo-type"), i + 1 < args.count {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { self.playDemo(typing: args[i + 1]) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { self.playDemo(typing: args[i + 1]) }
             }
             if let i = args.firstIndex(of: "--backdrop"), i + 1 < args.count, let rgb = Int(args[i + 1], radix: 16) {
                 showBackdrop(NSColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255,
@@ -173,6 +173,13 @@ final class AppDelegate: NSResponder, NSApplicationDelegate {
         guard panel != nil else { return }
         panelHost.layoutSubtreeIfNeeded()
         let size = panelHost.fittingSize
+        // Demo: a fixed spot mid-screen, top 200 pt down, so recordings can frame it with a margin on every side.
+        if Store.isDemo, size.height > 0, let f = NSScreen.main?.frame {
+            panel.setFrame(NSRect(x: (f.midX - size.width / 2).rounded(), y: f.maxY - 200 - size.height,
+                                  width: size.width, height: size.height), display: panel.isVisible)
+            panel.invalidateShadow()
+            return
+        }
         guard size.height > 0, let button = item.button, let win = button.window else { return }
         let r = win.convertToScreen(button.convert(button.bounds, to: nil))
         guard let screen = (win.screen ?? NSScreen.main)?.visibleFrame else { return }
