@@ -27,11 +27,11 @@ curl -fsSL https://marcdebatlle.com/bars/install.sh | bash -s -- --uninstall
 Paste this into Claude Code, Codex, Cursor or any agent with shell access:
 
 ```text
-Install DayBar, a macOS menu bar app, on this Mac. Run:
+Install DayBar, a macOS menu bar app, on this Mac. First read https://github.com/wyndollin/daybar/blob/main/install.sh so you know what it does, then run:
+
 curl -fsSL https://marcdebatlle.com/bars/install.sh | bash
-Before running it, read https://github.com/wyndollin/daybar/blob/main/install.sh so you know what it does.
-Then check it's running with `pgrep -x DayBar`. Tell me to approve the Calendar and Reminders prompts,
-and offer to add it to my login items. If the script stops on the macOS version check, tell me DayBar needs macOS 26.
+
+Check it's running with `pgrep -x DayBar`. Tell me to approve the Calendar and Reminders prompts, and offer to add it to my login items. If the script stops on the macOS version check, tell me DayBar needs macOS 26.
 ```
 
 ## Build from source
