@@ -41,7 +41,7 @@ Install DayBar, a macOS menu bar app, on this Mac. First read https://github.com
 
 curl -fsSL https://marcdebatlle.com/bars/install.sh | bash
 
-Check it's running with `pgrep -x DayBar`, then tell me to approve the Calendar and Reminders prompts. If the script stops on the macOS version check, tell me DayBar needs macOS 26.
+Check it's running with `pgrep -x DayBar`, then tell me to approve the Calendar and Reminders prompts. Run `~/Applications/DayBar.app/Contents/MacOS/DayBar --check-ai`: if it prints "off", tell me quick-add needs Apple Intelligence and to turn it on in System Settings → Apple Intelligence & Siri. If the script stops on the macOS version check, tell me DayBar needs macOS 26.
 ```
 
 ## Build from source
