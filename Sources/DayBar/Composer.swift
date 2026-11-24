@@ -254,6 +254,13 @@ private let timeFmt: DateFormatter = {
     let f = DateFormatter(); f.dateStyle = .none; f.timeStyle = .short; return f
 }()
 
+/// An icon and its text 4 pt apart, the icon a touch smaller, for the confirm card's detail lines.
+private struct TightLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) { configuration.icon.font(.system(size: 9.5, weight: .semibold)); configuration.title }
+    }
+}
+
 private struct ConfirmCard: View {
     let draft: Draft
     let options: [CalendarOption]
@@ -271,6 +278,16 @@ private struct ConfirmCard: View {
                 Text(draft.title).font(.system(size: 12.5, weight: .semibold)).lineLimit(2)
                 Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
+                if !draft.location.isEmpty {
+                    Label(draft.location, systemImage: "mappin.and.ellipse")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                        .labelStyle(TightLabel())
+                }
+                if draft.repeats != .never {
+                    Label(draft.repeats.label(from: draft.start, days: draft.repeatDays), systemImage: "repeat")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                        .labelStyle(TightLabel())
+                }
                 CalendarChip(draft: draft, options: options, choose: choose)
             }
             Spacer(minLength: 4)

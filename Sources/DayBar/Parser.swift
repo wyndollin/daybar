@@ -18,10 +18,38 @@ struct Draft: Equatable {
     /// The calendar or list it will land in (EventKit identifier + title), filled in by the Store.
     var calendarID: String? = nil
     var destination: String = ""
+    /// Where, when a place was typed ("at Can Dendê"); saved as the item's location.
+    var location: String = ""
+    var repeats: Repeat = .never
+    /// For a weekly repeat on several days ("every monday and wednesday"): Calendar weekdays, 1 = Sunday.
+    var repeatDays: [Int] = []
 
     var end: Date? {
         if let until { return until }
         return start.map { $0.addingTimeInterval(TimeInterval(durationMinutes * 60)) }
+    }
+}
+
+/// How often an item repeats. Saved as an EventKit recurrence rule.
+enum Repeat: String, Equatable, CaseIterable {
+    case never, daily, weekdays, weekly, biweekly, monthly, yearly
+
+    /// "Every week on Monday", in the card's words; the day comes from the item's start.
+    func label(from start: Date?, days: [Int] = []) -> String {
+        if self == .weekly, days.count > 1 {
+            let names = days.map { Calendar.current.weekdaySymbols[$0 - 1] }
+            return "Every " + names.dropLast().joined(separator: ", ") + " and " + names.last!
+        }
+        let day = start.map { $0.formatted(.dateTime.weekday(.wide)) }
+        switch self {
+        case .never: return ""
+        case .daily: return "Every day"
+        case .weekdays: return "Every weekday"
+        case .weekly: return day.map { "Every week on \($0)" } ?? "Every week"
+        case .biweekly: return day.map { "Every 2 weeks on \($0)" } ?? "Every 2 weeks"
+        case .monthly: return start.map { "Every month on day \(Calendar.current.component(.day, from: $0))" } ?? "Every month"
+        case .yearly: return start.map { "Every year on \($0.formatted(.dateTime.day().month(.wide)))" } ?? "Every year"
+        }
     }
 }
 
@@ -39,11 +67,12 @@ enum ParseError: LocalizedError {
 // MARK: - What the on-device model fills in
 
 @Generable enum ModelKind { case reminder, event }
+@Generable enum ModelRepeat { case never, daily, weekdays, weekly, biweekly, monthly, yearly }
 
 @Generable struct ModelParse {
     @Guide(description: "'event' for meetings, appointments, calendar events or anything with a duration; otherwise 'reminder'")
     var kind: ModelKind
-    @Guide(description: "Short task title IN THE SAME LANGUAGE THE USER WROTE (never translate it), spelling corrected, first letter capitalised, WITHOUT time words, WITHOUT 'remind me', 'recuérdame', 'put a reminder', 'event', 'urgent', 'urgente'. E.g. 'Call mom', 'Llamar a mamá'")
+    @Guide(description: "Short task title IN THE SAME LANGUAGE THE USER WROTE (never translate it), spelling corrected, first letter capitalised, WITHOUT time words, WITHOUT the place, WITHOUT repeat words ('every week', 'cada lunes'), WITHOUT 'remind me', 'recuérdame', 'put a reminder', 'event', 'urgent', 'urgente'. E.g. 'Call mom', 'Llamar a mamá'")
     var title: String
     @Guide(description: """
     The WHEN part rewritten in canonical form, using ONLY these tokens separated by spaces:
@@ -67,6 +96,18 @@ enum ParseError: LocalizedError {
     var durationMinutes: Int
     @Guide(description: "true only if the user says it is urgent, important, asap, high priority or similar")
     var urgent: Bool
+    @Guide(description: """
+    The PLACE, only if the user names one: a restaurant, venue, address, room, office, city, usually after 'at', '@',
+    'in', 'en', 'a'. Copy it exactly as written. Never a time, a date or a person. Empty string if no place is named.
+    E.g. 'lunch with Ana at Can Dendê friday 2pm' -> 'Can Dendê'; 'cena en La Pepita' -> 'La Pepita'.
+    """)
+    var location: String
+    @Guide(description: """
+    How often it repeats, only if the user says it does ('every', 'each', 'weekly', 'recurring', 'cada', 'todos los',
+    'los lunes'): daily, weekdays (Monday to Friday), weekly, biweekly (every other week), monthly, yearly.
+    'every monday' -> weekly; 'every other tuesday' / 'cada dos semanas' -> biweekly. Otherwise never.
+    """)
+    var repeats: ModelRepeat
 }
 
 enum Parser {
@@ -133,11 +174,30 @@ enum Parser {
         var title = p.title.trimmingCharacters(in: .whitespacesAndNewlines)
         // The model sometimes translates the title ("llamar a mamá" -> "Call mom"). If it shares almost no
         // words with what was typed, use the typed words, minus the time words at either end.
-        let titleWords = title.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
-        let shared = titleWords.filter { tw in
-            words.contains { $0 == tw || (min($0.count, tw.count) >= 3 && ($0.hasPrefix(tw) || tw.hasPrefix($0))) }
-        }.count
-        if title.isEmpty || (!titleWords.isEmpty && shared * 2 < titleWords.count) { title = typedTitle(text) }
+        // Every real word of the title must be one that was typed (a spelling fix is fine: "mlk" -> "milk");
+        // otherwise the model rewrote it ("sacar la basura" -> "Recoger basura") and the typed words are used.
+        let plain = { (x: String) in x.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+        let typedPlain = words.map(plain)
+        let titleWords = title.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" }).map(String.init)
+        let invented = titleWords.contains { tw in
+            let w = plain(tw)
+            guard w.count >= 3 else { return false }
+            return !typedPlain.contains { $0 == w || (min($0.count, w.count) >= 4 && ($0.hasPrefix(w) || w.hasPrefix($0)))
+                || distance($0, w) <= (w.count >= 6 ? 2 : 1) }
+        }
+        if title.isEmpty || invented {
+            // Nothing but time and repeat words typed ("this is recurrent every week at monday"): keep the model's.
+            let typedOnly = typedTitle(text)
+            title = typedOnly.isEmpty ? (title.isEmpty ? cleanTitle(text) : title) : typedOnly
+        } else {
+            // Put the typed accents back ("Clase de ingles" -> "Clase de inglés").
+            for tw in titleWords {
+                if let typed = words.first(where: { plain($0) == plain(tw) && $0 != tw.lowercased() }) {
+                    let fixed = tw.first!.isUppercase ? typed.prefix(1).uppercased() + typed.dropFirst() : typed
+                    title = title.replacingOccurrences(of: tw, with: fixed)
+                }
+            }
+        }
         title = title.prefix(1).uppercased() + title.dropFirst()
 
         // Only keep a clock time if the user typed one (digits or a time-of-day word); the model likes to invent 11:00.
@@ -185,6 +245,24 @@ enum Parser {
             }
         }
 
+        // The clock that was typed wins over the model's reading of it ("every weekday at 9:30" came back as
+        // "in 90 minutes"). With a repeat, an "in N days/weeks" from the model was its reading of "every…": dropped.
+        let (ruleRepeatEarly, saysRepeatEarly) = typedRepeat(lower)
+        let repeating = ruleRepeatEarly != nil || saysRepeatEarly
+        let modelOffset = whenText.trimmingCharacters(in: .whitespaces).hasPrefix("in ")
+        let namedDays = typed.isEmpty ? typedWeekdays(in: words, now: now) : []
+        if repeating && modelOffset && namedDays.isEmpty && typed.isEmpty { when = nil }
+        if let c = typedClockValue(lower) {
+            let cal = Calendar.current
+            if let w = when, !(modelOffset && namedDays.isEmpty && typed.isEmpty) {
+                when = When(date: cal.date(bySettingHour: c.h, minute: c.m, second: 0, of: w.date)!, hasTime: true)
+            } else {
+                var d = cal.date(bySettingHour: c.h, minute: c.m, second: 0, of: now)!
+                if d <= now { d = cal.date(byAdding: .day, value: 1, to: d)! }
+                when = When(date: d, hasTime: true)
+            }
+        }
+
         // Same for durations: only if the user said how long.
         // "in 2 hours" / "en 2 horas" says when, not how long.
         let durationText = lower.replacingOccurrences(of: #"\b(in|en)\s+(an?|una?|\d+|media)\s*(h|m)\w*"#, with: " ",
@@ -192,6 +270,46 @@ enum Parser {
         let typedDuration = durationText.range(of: #"\bfor\b|hour|\bhr|\bmin|\d\s*h\b|half|\bdurante\b|\bhoras?\b|media hora"#, options: .regularExpression) != nil
         let duration = typedDuration && p.durationMinutes > 0 ? p.durationMinutes : 60
 
+        // Where: kept only if the place is really in what was typed (the model can invent one), then taken
+        // out of the title ("Lunch with Ana at Can Dendê" -> "Lunch with Ana" + Can Dendê).
+        var location = p.location.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ",.")))
+        let fold = { (x: String) in x.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+        let placeWord = #"(?:\bat|@|\bin|\ben|\ba|\bal)\s+(?:(?:the|el|la|los|las)\s+)?"#
+        if location.count < 2 || location.allSatisfy({ $0.isNumber || $0 == ":" }) || timeWords.contains(fold(location))
+            || fold(text).range(of: placeWord + NSRegularExpression.escapedPattern(for: fold(location)),
+                                options: .regularExpression) == nil {
+            location = ""      // not typed, or not after "at / in / @ / en / a": "offsite", "dentist" are not places
+        }
+        if !location.isEmpty {
+            // The whole place first, then its first words ("…at Carrer de Balmes" when "120" was left out).
+            let parts = location.split(separator: " ").map(String.init)
+            for n in stride(from: parts.count, through: 1, by: -1) {
+                let piece = parts.prefix(n).joined(separator: " ")
+                guard piece.count >= 4 || n == parts.count else { continue }
+                let esc = NSRegularExpression.escapedPattern(for: piece)
+                let cut = title.replacingOccurrences(of: #"\s*(?:\b(?:at|in|en|a|al)\s+(?:(?:the|el|la|los|las)\s+)?|@\s*)?"# + esc + #"\b"#,
+                                                     with: "", options: [.regularExpression, .caseInsensitive, .diacriticInsensitive])
+                if cut != title { title = cut; break }
+            }
+            title = title.trimmingCharacters(in: CharacterSet(charactersIn: " ,.-"))
+            if title.isEmpty { title = typedTitle(text.replacingOccurrences(of: location, with: "")) }
+            if title.isEmpty { title = cleanTitle(text) }
+        }
+
+        // How often: our own rules first; the model's answer only when a repeat was clearly asked for
+        // ("this is recurrent…") and the rules couldn't tell how often.
+        let repeats: Repeat = ruleRepeatEarly ?? (saysRepeatEarly ? Repeat(rawValue: "\(p.repeats)") ?? .never : .never)
+        if repeats == .weekdays, let w = when {
+            // the first one is the next Monday-to-Friday on or after the day read
+            var d = w.date
+            while [1, 7].contains(Calendar.current.component(.weekday, from: d)) { d = Calendar.current.date(byAdding: .day, value: 1, to: d)! }
+            when = When(date: d, hasTime: w.hasTime)
+        }
+        let repeatDays = repeats == .weekly && namedDays.count > 1
+            ? Array(Set(namedDays.map { Calendar.current.component(.weekday, from: $0) })).sorted { ($0 + 5) % 7 < ($1 + 5) % 7 }
+            : []
+
+        var draft: Draft
         switch kind {
         case .event:
             // No time given at all: the next full hour.
@@ -209,12 +327,78 @@ enum Parser {
                     until = cal.startOfDay(for: u.date)
                 }
             }
-            return Draft(kind: .event, title: title, start: start, hasTime: hasTime,
-                         durationMinutes: duration, urgent: false, until: until)
+            draft = Draft(kind: .event, title: title, start: start, hasTime: hasTime,
+                          durationMinutes: duration, urgent: false, until: repeats == .never ? until : nil)
         case .reminder:
-            return Draft(kind: .reminder, title: title, start: when?.date, hasTime: when?.hasTime ?? false,
-                         durationMinutes: 0, urgent: urgent)
+            // A repeating reminder needs a first due day: today, unless one was given.
+            draft = Draft(kind: .reminder, title: title,
+                          start: when?.date ?? (repeats == .never ? nil : Calendar.current.startOfDay(for: now)),
+                          hasTime: when?.hasTime ?? false, durationMinutes: 0, urgent: urgent)
         }
+        draft.location = location
+        draft.repeats = repeats
+        draft.repeatDays = repeatDays
+        return draft
+    }
+
+    /// The clock the user typed, read with rules: "9:30", "7pm", "15h", "a las 9", "a las 8 de la tarde",
+    /// "at 5" (1 to 7 means pm). Durations ("for 1h", "durante 2 horas") are not clocks.
+    static func typedClockValue(_ lower: String) -> (h: Int, m: Int)? {
+        let t = lower.folding(options: [.diacriticInsensitive], locale: nil)
+            .replacingOccurrences(of: #"\b(for|durante|en|in)\s+\d+(\.\d+)?\s*(h|hr|hrs|hours?|horas?|m|min|mins|minutes?|minutos?)\b"#,
+                                  with: " ", options: .regularExpression)
+        func m(_ re: String) -> [String]? {
+            guard let r = try? NSRegularExpression(pattern: re), let x = r.firstMatch(in: t, range: NSRange(t.startIndex..., in: t))
+            else { return nil }
+            return (0..<x.numberOfRanges).map { Range(x.range(at: $0), in: t).map { String(t[$0]) } ?? "" }
+        }
+        let part = m(#"\bde la (manana|tarde|noche)\b"#)?[1]
+        func shift(_ h: Int, _ ampm: String) -> Int {
+            if ampm == "pm" || part == "tarde" || part == "noche" { return h % 12 + 12 }
+            if ampm == "am" || part == "manana" { return h % 12 }
+            return h
+        }
+        var hm: (Int, Int)?
+        if let g = m(#"\b(\d{1,2})[:.](\d{2})\s*(am|pm)?\b"#) { hm = (shift(Int(g[1])!, g[3]), Int(g[2])!) }
+        else if let g = m(#"\b(\d{1,2})\s*(am|pm)\b"#) { hm = (shift(Int(g[1])!, g[2]), 0) }
+        else if let g = m(#"\b(\d{1,2})h\b"#) { hm = (Int(g[1])!, 0) }
+        else if let g = m(#"\ba las? (\d{1,2})\b"#) { let h = Int(g[1])!; hm = (part == nil && h < 8 ? h + 12 : shift(h, ""), 0) }
+        else if let g = m(#"\b(?:at|@) (\d{1,2})\b"#) { let h = Int(g[1])!; hm = (h < 8 ? h + 12 : h, 0) }
+        guard let (h, mi) = hm, (0...23).contains(h), (0...59).contains(mi) else { return nil }
+        return (h, mi)
+    }
+
+    /// Levenshtein distance, for telling a spelling fix ("mlk" -> "milk") from a different word.
+    static func distance(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        guard !a.isEmpty, !b.isEmpty else { return max(a.count, b.count) }
+        var row = Array(0...b.count)
+        for i in 1...a.count {
+            var prev = row[0]; row[0] = i
+            for j in 1...b.count {
+                let cur = row[j]
+                row[j] = min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] == b[j - 1] ? 0 : 1))
+                prev = cur
+            }
+        }
+        return row[b.count]
+    }
+
+    /// The repeat a phrase asks for, read with plain rules (accents ignored), and whether it asked for one at all.
+    /// "el lunes" is one Monday; "los lunes" / "every monday" / "cada lunes" is every Monday.
+    static func typedRepeat(_ lower: String) -> (Repeat?, Bool) {
+        let t = lower.folding(options: [.diacriticInsensitive], locale: nil)
+        func has(_ re: String) -> Bool { t.range(of: re, options: .regularExpression) != nil }
+        let day = #"(monday|mon|tuesday|tues|tue|wednesday|wed|thursday|thurs|thur|thu|friday|fri|saturday|sat|sunday|sun)"#
+        let dia = #"(lunes|martes|miercoles|jueves|viernes|sabados?|domingos?)"#
+        if has(#"\b(every other|every (2|two) weeks?|biweekly|fortnightly|cada (2|dos) semanas|cada quince dias|quincenal(mente)?)\b"#) { return (.biweekly, true) }
+        if has(#"\b(every|each) weekdays?\b|\bon weekdays\b|\bweekdays\b|\bentre semana\b|\bdias laborables\b|\bcada dia laborable\b"#) { return (.weekdays, true) }
+        if has(#"\b(every|each) (day|morning|evening|night)\b|\b(daily|everyday)\b|\bcada (dia|manana|noche|tarde)\b|\btodos los dias\b|\btodas las (mananas|noches|tardes)\b|\bdiari(o|a|amente)\b"#) { return (.daily, true) }
+        if has(#"\b(every|each) (week|\#(day))\b|\bweekly\b|\bon \#(day)s\b|\bcada semana\b|\bsemanal(mente)?\b|\bcada \#(dia)\b|\b(todos )?los \#(dia)\b|\btodas las semanas\b"#) { return (.weekly, true) }
+        if has(#"\b(every|each) month\b|\bmonthly\b|\bcada mes\b|\bmensual(mente)?\b|\btodos los meses\b"#) { return (.monthly, true) }
+        if has(#"\b(every|each) year\b|\b(yearly|annually)\b|\bcada ano\b|\banual(mente)?\b|\btodos los anos\b"#) { return (.yearly, true) }
+        let asked = has(#"\b(recurr\w*|repeat\w*|repetitiv\w*|se repite|recurrente|periodic\w*)\b"#)
+        return (nil, asked)
     }
 
     /// What was typed, minus "remind me" and the time words at the start and the end:
@@ -224,7 +408,11 @@ enum Parser {
                                  "at", "on", "in", "for", "next", "this", "from", "to", "until", "am", "pm", "and",
                                  "hoy", "mañana", "manana", "pasado", "tarde", "noche", "esta", "este", "mediodía", "mediodia",
                                  "a", "las", "la", "el", "los", "de", "del", "al", "en", "por", "para", "durante", "hasta",
-                                 "y", "que", "próximo", "proximo", "próxima", "proxima", "hora", "horas", "minutos", "media"]
+                                 "y", "que", "próximo", "proximo", "próxima", "proxima", "hora", "horas", "minutos", "media",
+                                 "every", "each", "week", "weekly", "daily", "monthly", "yearly", "weekday", "weekdays", "other",
+                                 "cada", "todos", "todas", "semana", "semanas", "semanal", "diario", "mensual", "anual", "dos",
+                                 "recurring", "recurrent", "is", "this", "it's", "its", "días", "dias", "día", "dia", "mes",
+                                 "meses", "año", "años", "month", "year", "every", "days", "weeks", "months"]
         let when = base.union(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
                     "lunes", "martes", "miércoles", "miercoles", "jueves", "viernes", "sábado", "sabado", "domingo"])
             .union(monthNames).union(spanishMonths)
@@ -236,7 +424,7 @@ enum Parser {
         while let f = toks.first, isWhen(f) { toks.removeFirst() }
         while let l = toks.last, isWhen(l) { toks.removeLast() }
         let t = toks.joined(separator: " ").trimmingCharacters(in: CharacterSet(charactersIn: " ,.!-:"))
-        return t.isEmpty ? cleanTitle(s) : t.prefix(1).uppercased() + t.dropFirst()
+        return t.isEmpty ? "" : t.prefix(1).uppercased() + t.dropFirst()
     }
 
     /// "Put a reminder to buy milk" -> "Buy milk".

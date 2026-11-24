@@ -23,7 +23,7 @@ if let i = CommandLine.arguments.firstIndex(of: "--parse"), i + 1 < CommandLine.
             print("""
                 \(d.kind == .event ? "event" : "reminder"): \(d.title)
                   start: \(d.start.map(f.string(from:)) ?? "none")\(d.hasTime ? "" : " (no time)")
-                  end:   \(d.end.map(f.string(from:)) ?? "none")\(d.urgent ? "\n  urgent" : "")
+                  end:   \(d.end.map(f.string(from:)) ?? "none")\(d.urgent ? "\n  urgent" : "")\(d.location.isEmpty ? "" : "\n  where: \(d.location)")\(d.repeats == .never ? "" : "\n  repeats: \(d.repeats.label(from: d.start, days: d.repeatDays))")
                 """)
             exit(0)
         } catch {

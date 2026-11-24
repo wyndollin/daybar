@@ -188,6 +188,30 @@ final class Store: ObservableObject {
         }
     }
 
+    /// The EventKit rule for a repeat; nil for one-off items.
+    static func rule(_ r: Repeat, days: [Int] = []) -> EKRecurrenceRule? {
+        if r == .weekly, days.count > 1 {
+            return EKRecurrenceRule(recurrenceWith: .weekly, interval: 1,
+                                    daysOfTheWeek: days.compactMap { EKWeekday(rawValue: $0).map(EKRecurrenceDayOfWeek.init) },
+                                    daysOfTheMonth: nil, monthsOfTheYear: nil, weeksOfTheYear: nil, daysOfTheYear: nil,
+                                    setPositions: nil, end: nil)
+        }
+        switch r {
+        case .never: return nil
+        case .daily: return EKRecurrenceRule(recurrenceWith: .daily, interval: 1, end: nil)
+        case .weekly: return EKRecurrenceRule(recurrenceWith: .weekly, interval: 1, end: nil)
+        case .biweekly: return EKRecurrenceRule(recurrenceWith: .weekly, interval: 2, end: nil)
+        case .monthly: return EKRecurrenceRule(recurrenceWith: .monthly, interval: 1, end: nil)
+        case .yearly: return EKRecurrenceRule(recurrenceWith: .yearly, interval: 1, end: nil)
+        case .weekdays:
+            let days: [EKWeekday] = [.monday, .tuesday, .wednesday, .thursday, .friday]
+            return EKRecurrenceRule(recurrenceWith: .weekly, interval: 1, daysOfTheWeek: days.map { EKRecurrenceDayOfWeek($0) },
+                                    daysOfTheMonth: nil, monthsOfTheYear: nil, weeksOfTheYear: nil, daysOfTheYear: nil,
+                                    setPositions: nil, end: nil)
+        }
+    }
+    private func rule(_ r: Repeat) -> EKRecurrenceRule? { Self.rule(r) }
+
     func add(_ d: Draft) throws {
         if Self.isDemo { return }
         let cal = Calendar.current
@@ -209,7 +233,9 @@ final class Store: ObservableObject {
                 let lastDay = max(cal.startOfDay(for: d.until ?? start), e.startDate)
                 e.endDate = cal.date(byAdding: .day, value: 1, to: lastDay)!
             }
-            try ek.save(e, span: .thisEvent, commit: true)
+            if !d.location.isEmpty { e.location = d.location }
+            if let rule = Self.rule(d.repeats, days: d.repeatDays) { e.addRecurrenceRule(rule) }
+            try ek.save(e, span: rule(d.repeats) == nil ? .thisEvent : .futureEvents, commit: true)
         case .reminder:
             guard reminderAccess == .granted else { throw AddError.noAccess("Reminders") }
             guard let target = target(for: d) else { throw AddError.noDefault("Reminders") }
@@ -225,6 +251,8 @@ final class Store: ObservableObject {
                 if alarmAt > Date() { r.addAlarm(EKAlarm(absoluteDate: alarmAt)) }
             }
             if d.urgent { r.priority = 1 }   // "High" priority, shown as !!! in Reminders
+            if !d.location.isEmpty { r.location = d.location }
+            if let rule = Self.rule(d.repeats, days: d.repeatDays) { r.addRecurrenceRule(rule) }
             try ek.save(r, commit: true)
         }
         if let id = d.calendarID { UserDefaults.standard.set(id, forKey: lastUsedKey(d.kind)) }
