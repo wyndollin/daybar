@@ -43,7 +43,7 @@ enum ParseError: LocalizedError {
 @Generable struct ModelParse {
     @Guide(description: "'event' for meetings, appointments, calendar events or anything with a duration; otherwise 'reminder'")
     var kind: ModelKind
-    @Guide(description: "Short task title, spelling corrected, first letter capitalised, WITHOUT time words, WITHOUT 'remind me', 'put a reminder', 'event', 'urgent'. E.g. 'Call mom'")
+    @Guide(description: "Short task title IN THE SAME LANGUAGE THE USER WROTE (never translate it), spelling corrected, first letter capitalised, WITHOUT time words, WITHOUT 'remind me', 'recuérdame', 'put a reminder', 'event', 'urgent', 'urgente'. E.g. 'Call mom', 'Llamar a mamá'")
     var title: String
     @Guide(description: """
     The WHEN part rewritten in canonical form, using ONLY these tokens separated by spaces:
@@ -51,7 +51,10 @@ enum ParseError: LocalizedError {
     'monday'..'sunday' | 'YYYY-MM-DD' | 'HH:MM' (24-hour clock).
     Fix typos and slang, numbers as digits. Examples: 'tmrw at 3pm' -> 'tomorrow 15:00'; 'in 2hrs' -> 'in 2 hours';
     'in two days from now' -> 'in 2 days'; 'next fri 1pm' -> 'friday 13:00'; 'half an hour' -> 'in 30 minutes';
-    'tonight' -> 'today 20:00'; 'tomorrow morning' -> 'tomorrow 09:00'. Empty string if no time is given.
+    'tonight' -> 'today 20:00'; 'tomorrow morning' -> 'tomorrow 09:00'.
+    The user may write in Spanish: 'mañana a las 5 de la tarde' -> 'tomorrow 17:00'; 'el lunes a las 9' -> 'monday 09:00';
+    'pasado mañana' -> 'in 2 days'; 'esta noche' -> 'today 20:00'; 'en 2 horas' -> 'in 2 hours'; 'viernes' -> 'friday'.
+    Empty string if no time is given.
     """)
     var when: String
     @Guide(description: """
@@ -71,7 +74,12 @@ enum Parser {
                                     "noon", "midnight", "week", "month", "monday", "tuesday", "wednesday", "thursday", "friday",
                                     "saturday", "sunday", "mon", "tue", "wed", "thu", "fri", "sat", "sun", "hour", "min", "day",
                                     "event", "meeting", "calendar", "appointment"] + monthNames.map { String($0.prefix(3)) }
-    private static let urgentWords = ["urgent", "urgently", "asap", "important", "!!!", "priority", "urgnt", "urgen"]
+        // Spanish: Apple Intelligence reads Spanish, so these rules do too.
+        + ["hoy", "mañana", "manana", "pasado", "tarde", "noche", "mediodía", "mediodia", "medianoche", "semana", "mes",
+           "lunes", "martes", "miércoles", "miercoles", "jueves", "viernes", "sábado", "sabado", "domingo", "hora", "día",
+           "dia", "reunión", "reunion", "cita", "evento", "calendario"] + spanishMonths.map { String($0.prefix(3)) }
+    private static let urgentWords = ["urgent", "urgently", "asap", "important", "!!!", "priority", "urgnt", "urgen",
+                                      "urgente", "importante", "prioridad", "prioritario"]
 
     static func parse(_ raw: String, now: Date = Date()) async throws -> Draft {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -107,10 +115,15 @@ enum Parser {
             """)
         let p = try await session.respond(to: text, generating: ModelParse.self,
                                           options: GenerationOptions(sampling: .greedy)).content
+        if ProcessInfo.processInfo.environment["DAYBAR_DEBUG"] != nil {
+            print("model: kind=\(p.kind) title=\(p.title) when=\(p.when) until=\(p.until) minutes=\(p.durationMinutes)")
+        }
 
         // The model guesses; what the user literally typed wins.
-        let saysReminder = words.contains { $0.hasPrefix("remind") || $0.hasPrefix("rememb") || $0.hasPrefix("remid") || $0 == "todo" }
-        let saysEvent = words.contains { $0 == "event" || $0.hasPrefix("calend") || $0.hasPrefix("meeting") || $0.hasPrefix("meting") || $0.hasPrefix("appointment") }
+        let saysReminder = words.contains { $0.hasPrefix("remind") || $0.hasPrefix("rememb") || $0.hasPrefix("remid") || $0 == "todo"
+            || $0.hasPrefix("recuerd") || $0.hasPrefix("recuérd") || $0.hasPrefix("recordatorio") || $0.hasPrefix("recordar") }
+        let saysEvent = words.contains { $0 == "event" || $0.hasPrefix("calend") || $0.hasPrefix("meeting") || $0.hasPrefix("meting") || $0.hasPrefix("appointment")
+            || $0 == "evento" || $0.hasPrefix("reuni") || $0 == "cita" }
         let urgent = p.urgent || urgentHint
         let kind: Draft.Kind = saysReminder && !saysEvent ? .reminder
             : saysEvent ? .event
@@ -118,14 +131,22 @@ enum Parser {
             : (p.kind == .event ? .event : .reminder)
 
         var title = p.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty { title = cleanTitle(text) }
+        // The model sometimes translates the title ("llamar a mamá" -> "Call mom"). If it shares almost no
+        // words with what was typed, use the typed words, minus the time words at either end.
+        let titleWords = title.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        let shared = titleWords.filter { tw in
+            words.contains { $0 == tw || (min($0.count, tw.count) >= 3 && ($0.hasPrefix(tw) || tw.hasPrefix($0))) }
+        }.count
+        if title.isEmpty || (!titleWords.isEmpty && shared * 2 < titleWords.count) { title = typedTitle(text) }
         title = title.prefix(1).uppercased() + title.dropFirst()
 
         // Only keep a clock time if the user typed one (digits or a time-of-day word); the model likes to invent 11:00.
         var whenText = p.when
-        let typedClock = lower.range(of: #"\d{1,2}[:.]\d{2}|\d\s*(am|pm|a\.m|p\.m|h)\b|\b(at|@)\s*\d|\bin\s+(an?|\d+)\s*(m|h)"#,
+        let typedClock = lower.range(of: #"\d{1,2}[:.]\d{2}|\d\s*(am|pm|a\.m|p\.m|h)\b|\b(at|@)\s*\d|\bin\s+(an?|\d+)\s*(m|h)|\ba\s+las?\s+\d|\ben\s+(una?|\d+|media)\s*(m|h)"#,
                                      options: .regularExpression) != nil
-            || ["tonight", "morning", "noon", "midday", "afternoon", "evening", "midnight"].contains { lower.contains($0) }
+            || ["tonight", "morning", "noon", "midday", "afternoon", "evening", "midnight",
+                "esta noche", "esta tarde", "de la mañana", "por la mañana", "de la tarde", "por la tarde", "de la noche",
+                "por la noche", "mediodía", "mediodia", "medianoche"].contains { lower.contains($0) }
         if !typedClock {
             whenText = whenText.split(separator: " ").filter { !$0.contains(":") }.joined(separator: " ")
         }
@@ -165,7 +186,10 @@ enum Parser {
         }
 
         // Same for durations: only if the user said how long.
-        let typedDuration = lower.range(of: #"\bfor\b|hour|\bhr|\bmin|\d\s*h\b|half"#, options: .regularExpression) != nil
+        // "in 2 hours" / "en 2 horas" says when, not how long.
+        let durationText = lower.replacingOccurrences(of: #"\b(in|en)\s+(an?|una?|\d+|media)\s*(h|m)\w*"#, with: " ",
+                                                      options: .regularExpression)
+        let typedDuration = durationText.range(of: #"\bfor\b|hour|\bhr|\bmin|\d\s*h\b|half|\bdurante\b|\bhoras?\b|media hora"#, options: .regularExpression) != nil
         let duration = typedDuration && p.durationMinutes > 0 ? p.durationMinutes : 60
 
         switch kind {
@@ -193,12 +217,36 @@ enum Parser {
         }
     }
 
+    /// What was typed, minus "remind me" and the time words at the start and the end:
+    /// "llamar a mamá mañana" -> "Llamar a mamá", "pasado mañana pagar el alquiler" -> "Pagar el alquiler".
+    static func typedTitle(_ s: String) -> String {
+        let base: Set<String> = ["today", "tonight", "tomorrow", "tmrw", "tmr", "morning", "afternoon", "evening", "noon",
+                                 "at", "on", "in", "for", "next", "this", "from", "to", "until", "am", "pm", "and",
+                                 "hoy", "mañana", "manana", "pasado", "tarde", "noche", "esta", "este", "mediodía", "mediodia",
+                                 "a", "las", "la", "el", "los", "de", "del", "al", "en", "por", "para", "durante", "hasta",
+                                 "y", "que", "próximo", "proximo", "próxima", "proxima", "hora", "horas", "minutos", "media"]
+        let when = base.union(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+                    "lunes", "martes", "miércoles", "miercoles", "jueves", "viernes", "sábado", "sabado", "domingo"])
+            .union(monthNames).union(spanishMonths)
+        var toks = cleanTitle(s).split(separator: " ").map(String.init)
+        func isWhen(_ t: String) -> Bool {
+            let w = t.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ",.!:;"))
+            return when.contains(w) || w.first?.isNumber == true
+        }
+        while let f = toks.first, isWhen(f) { toks.removeFirst() }
+        while let l = toks.last, isWhen(l) { toks.removeLast() }
+        let t = toks.joined(separator: " ").trimmingCharacters(in: CharacterSet(charactersIn: " ,.!-:"))
+        return t.isEmpty ? cleanTitle(s) : t.prefix(1).uppercased() + t.dropFirst()
+    }
+
     /// "Put a reminder to buy milk" -> "Buy milk".
     static func cleanTitle(_ s: String) -> String {
         var t = s.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefixes = ["put a reminder to ", "put a reminder for ", "put a reminder ", "add a reminder to ", "add a reminder ",
                         "make a reminder to ", "set a reminder to ", "reminder to ", "reminder: ", "reminder ",
-                        "remind me to ", "remind me ", "remember to ", "todo: ", "todo ", "to do "]
+                        "remind me to ", "remind me ", "remember to ", "todo: ", "todo ", "to do ",
+                        "pon un recordatorio para ", "pon un recordatorio de ", "recordatorio para ", "recordatorio: ",
+                        "recuérdame que ", "recuerdame que ", "recuérdame ", "recuerdame ", "recordarme ", "recordar "]
         for p in prefixes where t.lowercased().hasPrefix(p) { t = String(t.dropFirst(p.count)); break }
         let drop = Set(urgentWords + ["(urgent)", "-", "!"])
         t = t.split(separator: " ").filter { !drop.contains($0.lowercased()) }.joined(separator: " ")
@@ -207,6 +255,9 @@ enum Parser {
     }
 
     // MARK: - Spelled-out dates (plain code, no model)
+
+    static let spanishMonths = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+                                "septiembre", "octubre", "noviembre", "diciembre"]
 
     static let monthNames = ["january", "february", "march", "april", "may", "june", "july", "august",
                              "september", "october", "november", "december"]
@@ -221,15 +272,15 @@ enum Parser {
     /// "July 5 to 9". A date without a year is the next one that isn't in the past.
     static func explicitDates(in text: String, now: Date = Date()) -> [Date] {
         let cal = Calendar.current
-        let month = #"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b\.?"#
+        let month = #"(enero|febrero|marzo|abril|mayo|junio|julio|agosto|sep?tiembre|octubre|noviembre|diciembre|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b\.?"#
         let day = #"(\d{1,2})(?:st|nd|rd|th)?"#
         let year = #"(?:,?\s+(\d{4}))?"#
-        let range = #"\s*(?:-|–|to|until|till|through|thru)\s*"#
+        let range = #"\s*(?:-|–|to|until|till|through|thru|al|a|hasta)\s*"#
         // Each pattern: which capture groups hold day1, day2 (range), month, year.
         let patterns: [(String, d1: Int, d2: Int?, m: Int, y: Int)] = [
-            (#"\b\#(day)\#(range)\#(day)\s+(?:of\s+)?\#(month)\#(year)"#, 1, 2, 3, 4),   // 5-9 July 2027
+            (#"\b\#(day)\#(range)\#(day)\s+(?:(?:of|de)\s+)?\#(month)\#(year)"#, 1, 2, 3, 4),   // 5-9 July 2027
             (#"\b\#(month)\s+\#(day)\#(range)\#(day)\b\#(year)"#, 2, 3, 1, 4),            // July 5 to 9, 2027
-            (#"\b\#(day)\s+(?:of\s+)?\#(month)\#(year)"#, 1, nil, 2, 3),                 // 5th of July 2027
+            (#"\b\#(day)\s+(?:(?:of|de)\s+)?\#(month)\#(year)"#, 1, nil, 2, 3),                 // 5th of July 2027
             (#"\b\#(month)\s+\#(day)\b\#(year)"#, 2, nil, 1, 3),                         // July 5th, 2027
             (#"\b(\d{4})-(\d{2})-(\d{2})\b"#, 3, nil, 2, 1),                            // 2027-07-05
         ]
@@ -245,7 +296,9 @@ enum Parser {
                     let gr = match.range(at: i); return gr.location == NSNotFound ? nil : ns.substring(with: gr)
                 }
                 guard let mText = g(m) else { continue }
-                let mNum = Int(mText) ?? (monthNames.firstIndex { $0.hasPrefix(String(mText.lowercased().prefix(3))) }.map { $0 + 1 } ?? 0)
+                let ml = mText.lowercased().replacingOccurrences(of: "setiembre", with: "septiembre")
+                let mNum = Int(mText) ?? (spanishMonths.firstIndex(of: ml).map { $0 + 1 }
+                    ?? monthNames.firstIndex { $0.hasPrefix(String(ml.prefix(3))) }.map { $0 + 1 } ?? 0)
                 let yNum = g(y).flatMap { Int($0) }
                 var days = [g(d1)].compactMap { $0.flatMap { Int($0) } }
                 if let d2, let v = g(d2).flatMap({ Int($0) }) { days.append(v) }
@@ -276,7 +329,9 @@ enum Parser {
     /// on a Friday is next week's); each later one is the next after the one before, so "monday to friday" is a week.
     static func typedWeekdays(in words: [String], now: Date) -> [Date] {
         let names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
-        let short = ["sun": 1, "mon": 2, "tue": 3, "tues": 3, "wed": 4, "thu": 5, "thur": 5, "thurs": 5, "fri": 6, "sat": 7]
+        let short = ["sun": 1, "mon": 2, "tue": 3, "tues": 3, "wed": 4, "thu": 5, "thur": 5, "thurs": 5, "fri": 6, "sat": 7,
+                     "domingo": 1, "lunes": 2, "martes": 3, "miércoles": 4, "miercoles": 4, "jueves": 5, "viernes": 6,
+                     "sábado": 7, "sabado": 7, "dom": 1, "lun": 2, "mié": 4, "mie": 4, "jue": 5, "vie": 6, "sáb": 7, "sab": 7]
         let cal = Calendar.current
         var after = now
         var out: [Date] = []
@@ -295,9 +350,13 @@ enum Parser {
 
     static func resolve(_ s: String, now: Date = Date()) -> When? {
         let cal = Calendar.current
-        let toks = s.lowercased().replacingOccurrences(of: ",", with: " ")
+        // The model sometimes answers with an ISO timestamp ("2026-11-25T13:00:00"): read it as a day and a clock.
+        let iso8601 = s.replacingOccurrences(of: #"(\d{4}-\d{2}-\d{2})[Tt ](\d{2}:\d{2})(?::\d{2})?"#, with: "$1 $2",
+                                             options: .regularExpression)
+        let toks = iso8601.lowercased().replacingOccurrences(of: ",", with: " ")
             .split(whereSeparator: \.isWhitespace).map(String.init)
         var offset: Date?
+        var offsetHasClock = false      // "in 2 hours" is a moment; "in 2 days" is a day
         var day: Date?
         var clock: (h: Int, m: Int)?
         let weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
@@ -307,10 +366,14 @@ enum Parser {
         while i < toks.count {
             let t = toks[i]
             if t == "in", i + 2 < toks.count, let n = Int(toks[i + 1]), let u = unit(toks[i + 2]) {
-                offset = cal.date(byAdding: u, value: n, to: offset ?? now); i += 3; continue
+                offset = cal.date(byAdding: u, value: n, to: offset ?? now); i += 3
+                if u == .minute || u == .hour { offsetHasClock = true }
+                continue
             }
             if t == "in", i + 1 < toks.count, let (n, u) = glued(toks[i + 1]) {          // "in 2h", "in 45min"
-                offset = cal.date(byAdding: u, value: n, to: offset ?? now); i += 2; continue
+                offset = cal.date(byAdding: u, value: n, to: offset ?? now); i += 2
+                if u == .minute || u == .hour { offsetHasClock = true }
+                continue
             }
             switch t {
             case "today": day = cal.startOfDay(for: now)
@@ -335,6 +398,9 @@ enum Parser {
 
         func at(_ c: (h: Int, m: Int), on d: Date) -> Date { cal.date(bySettingHour: c.h, minute: c.m, second: 0, of: d)! }
 
+        if let o = offset, !offsetHasClock, clock == nil {
+            return When(date: cal.startOfDay(for: o), hasTime: false)
+        }
         if let o = offset {
             var d = o
             if let day = day, day != cal.startOfDay(for: now) { d = cal.date(bySettingHour: cal.component(.hour, from: o), minute: cal.component(.minute, from: o), second: 0, of: day)! }

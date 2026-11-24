@@ -13,6 +13,7 @@ More at **[marcdebatlle.com/bars](https://marcdebatlle.com/bars)**.
 - **Hover** the menu bar item to see the rest of today. **Click** to pin it open.
 - **⌥Space** opens it with the quick-add field focused. Type `call mom tomorrow 5pm` or `dentist friday 10:30 for 1h`, check the preview, and press Return.
 - Quick-add parsing runs on-device with Apple Intelligence. Nothing leaves your Mac.
+- **English or Spanish.** Type `dentist friday 10:30 for 1h` or `recuérdame llamar a mamá mañana a las 5 de la tarde`; the title stays in the language you wrote it in. Works whatever language your Mac is set to. The app's own labels are in English.
 
 Requires **macOS 26** or later.
 
